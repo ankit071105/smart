@@ -93,7 +93,6 @@
       background: radial-gradient(circle at 30% 30%, #4b5563, #111827);
       box-shadow: 0 0 20px rgba(0,0,0,0.6);
       overflow: hidden;
-      /* Allow joystick to handle its own touch */
       touch-action: none;
     }
 
@@ -139,7 +138,7 @@
       font-size: 1.1rem;
       pointer-events: none;
       z-index: 5;
-      transition: transform 0.15s, border-color 0.2s;
+      transition: all 0.2s ease;
     }
 
     .joystick.active .center {
@@ -311,12 +310,6 @@
         transform: translate(-50%, -50%) scale(1.8);
       }
     }
-
-    @keyframes centerMove {
-      0% { transform: translate(var(--x-offset), var(--y-offset)) scale(1); }
-      50% { transform: translate(var(--x-offset), var(--y-offset)) scale(1.1); }
-      100% { transform: translate(var(--x-offset), var(--y-offset)) scale(1); }
-    }
   </style>
 </head>
 <body>
@@ -386,8 +379,8 @@
   </audio>
 
   <script>
-    // COMPLETE ZOOM PREVENTION WITH WORKING JOYSTICK
-    // ===============================================
+    // FIXED: Joystick stays in position until released
+    // =================================================
 
     const statusEl = document.getElementById('status');
     const volumeSlider = document.getElementById('volumeSlider');
@@ -399,11 +392,13 @@
     let activeJoystick = null;
     let activeDirection = null;
     let audioInitialized = false;
+    let lastDirection = null; // Track the last direction
+    let joystickLocked = false; // Lock joystick in position
     
     // Audio elements
     const vibrationAudio = document.getElementById('vibrationSound');
     
-    // FIXED: Initialize audio
+    // Initialize audio
     function initializeAudio() {
       if (audioInitialized) return;
       
@@ -476,6 +471,7 @@
       }
     }
     
+    // FIXED: Move center point and lock it in position
     function moveCenterPoint(joystick, x, y) {
       const center = joystick.querySelector('.center');
       if (!center) return;
@@ -484,24 +480,56 @@
       const centerX = joystickRect.width / 2;
       const centerY = joystickRect.height / 2;
       
-      const offsetX = Math.max(-30, Math.min(30, x - centerX)) * 0.7;
-      const offsetY = Math.max(-30, Math.min(30, y - centerY)) * 0.7;
+      // Calculate offset from center (limited to 40px max)
+      let offsetX = x - centerX;
+      let offsetY = y - centerY;
       
-      center.style.setProperty('--x-offset', `${offsetX}px`);
-      center.style.setProperty('--y-offset', `${offsetY}px`);
-      center.style.animation = 'centerMove 0.5s ease-out';
+      // Limit the maximum offset to keep it within joystick bounds
+      const maxOffset = 40;
+      const distance = Math.sqrt(offsetX * offsetX + offsetY * offsetY);
+      
+      if (distance > maxOffset) {
+        const scale = maxOffset / distance;
+        offsetX *= scale;
+        offsetY *= scale;
+      }
+      
+      // Store the offset for later use
+      center.dataset.offsetX = offsetX;
+      center.dataset.offsetY = offsetY;
+      
+      // Apply the offset - NO TRANSITION when dragging
+      center.style.transition = 'none';
+      center.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+    }
+    
+    // FIXED: Lock center point in position
+    function lockCenterPoint(joystick) {
+      const center = joystick.querySelector('.center');
+      if (!center) return;
+      
+      // Get the stored offset
+      const offsetX = center.dataset.offsetX || 0;
+      const offsetY = center.dataset.offsetY || 0;
+      
+      // Apply transition back for smooth return when released
+      center.style.transition = 'all 0.2s ease';
+      center.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
     }
     
     function resetCenterPoint(joystick) {
       const center = joystick.querySelector('.center');
       if (!center) return;
       
-      center.style.setProperty('--x-offset', '0px');
-      center.style.setProperty('--y-offset', '0px');
-      center.style.animation = '';
+      center.style.transition = 'all 0.2s ease';
+      center.style.transform = 'translate(0px, 0px)';
+      
+      // Clear stored offset
+      delete center.dataset.offsetX;
+      delete center.dataset.offsetY;
     }
 
-    // Direction calculation from position
+    // FIXED: Direction calculation - lock to nearest direction
     function calculateDirectionFromPosition(x, y, joystick) {
       const rect = joystick.getBoundingClientRect();
       const centerX = rect.left + rect.width / 2;
@@ -511,17 +539,20 @@
       const deltaY = y - centerY;
       
       const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-      if (distance < 20) return null;
+      
+      // If too close to center, return null (no direction)
+      if (distance < 15) return null;
       
       const angle = Math.atan2(deltaY, deltaX) * 180 / Math.PI;
       
-      if (angle >= -45 && angle < 45) return 'right';
-      if (angle >= 45 && angle < 135) return 'down';
-      if (angle >= -135 && angle < -45) return 'up';
+      // Define direction zones with some hysteresis
+      if (angle >= -60 && angle < 60) return 'right';
+      if (angle >= 60 && angle < 120) return 'down';
+      if (angle >= -120 && angle < -60) return 'up';
       return 'left';
     }
 
-    // Handle joystick drag interaction
+    // FIXED: Handle joystick drag interaction - LOCK direction
     function handleJoystickStart(e) {
       // Always prevent default to stop zoom
       e.preventDefault();
@@ -552,6 +583,9 @@
       
       activeJoystick = joystick;
       activeDirection = dir;
+      joystickLocked = false; // Start unlocked
+      lastDirection = dir;
+      
       joystick.classList.add('active');
       
       showTouchFeedback(x, y, joystick);
@@ -559,9 +593,15 @@
       moveCenterPoint(joystick, x, y);
       
       statusEl.textContent = `${joyId}: ${dir || 'center'} (dragging)`;
-      if (dir) startVibration();
       
-      console.log('JOYSTICK START', joyId, dir, {x, y});
+      if (dir) {
+        startVibration();
+        // Lock the joystick to this direction
+        joystickLocked = true;
+        lockCenterPoint(joystick);
+      }
+      
+      console.log('JOYSTICK START', joyId, dir, {x, y, locked: joystickLocked});
       
       return false;
     }
@@ -596,23 +636,34 @@
       const x = clientX - rect.left;
       const y = clientY - rect.top;
       
-      const dir = calculateDirectionFromPosition(clientX, clientY, activeJoystick);
+      // If joystick is locked, don't recalculate direction
+      let dir = activeDirection;
       
-      if (dir !== activeDirection) {
+      if (!joystickLocked) {
+        dir = calculateDirectionFromPosition(clientX, clientY, activeJoystick);
+      }
+      
+      // Only update if direction changed and joystick is not locked
+      if (dir !== activeDirection && !joystickLocked) {
         activeDirection = dir;
         showDirectionIndicator(activeJoystick, dir);
         
         if (dir) {
           statusEl.textContent = `${activeJoystick.dataset.id}: ${dir} (dragging)`;
           startVibration();
+          // Lock the joystick when a direction is established
+          joystickLocked = true;
+          lockCenterPoint(activeJoystick);
         } else {
           statusEl.textContent = `${activeJoystick.dataset.id}: center`;
           stopVibration();
+          joystickLocked = false;
         }
         
-        console.log('JOYSTICK MOVE', activeJoystick.dataset.id, dir);
+        console.log('JOYSTICK MOVE - Direction changed', activeJoystick.dataset.id, dir, {locked: joystickLocked});
       }
       
+      // Always update the center point position visually
       moveCenterPoint(activeJoystick, x, y);
     }
     
@@ -633,12 +684,15 @@
       
       console.log('JOYSTICK END', joyId, activeDirection);
       
+      // Reset all state
       activeJoystick = null;
       activeDirection = null;
       activeTouch = null;
+      joystickLocked = false;
+      lastDirection = null;
     }
 
-    // Handle button interaction
+    // FIXED: Handle button interaction - stays active until released
     function handleButtonStart(e) {
       e.preventDefault();
       e.stopPropagation();
@@ -651,6 +705,7 @@
       activeBtn = btn;
       btn.classList.add('active');
       activeDirection = dir;
+      joystickLocked = true; // Button press locks the direction
       
       showDirectionIndicator(joystick, dir);
       statusEl.textContent = `${joyId}: ${dir} (holding)`;
@@ -666,14 +721,15 @@
         activeBtn.classList.remove('active');
         activeBtn = null;
         activeDirection = null;
+        joystickLocked = false;
       }
       stopVibration();
       statusEl.textContent = 'Ready - Touch or drag anywhere on joystick';
       console.log('BUTTON STOP');
     }
 
-    // FIXED: COMPLETE ZOOM PREVENTION SYSTEM
-    // ======================================
+    // COMPLETE ZOOM PREVENTION SYSTEM
+    // ================================
     
     // 1. Prevent ALL touch events globally at capture phase
     document.addEventListener('touchstart', function(e) {
@@ -791,7 +847,7 @@
       joystick.addEventListener('mouseup', handleJoystickEnd);
       joystick.addEventListener('mouseleave', handleJoystickEnd);
       
-      // Touch events for mobile - MUST prevent default here too
+      // Touch events for mobile
       joystick.addEventListener('touchstart', handleJoystickStart, { passive: false });
       joystick.addEventListener('touchmove', handleJoystickMove, { passive: false });
       joystick.addEventListener('touchend', handleJoystickEnd);
@@ -840,6 +896,8 @@
       
       document.addEventListener('click', initAudio, { once: true });
       document.addEventListener('touchstart', initAudio, { once: true });
+      
+      statusEl.textContent = 'Ready - Touch or drag anywhere on joystick';
     });
   </script>
 </body>
