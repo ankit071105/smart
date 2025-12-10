@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dual Joystick Control</title>
+
+  <!-- Maximum prevention of zooming -->
+  <meta name="viewport" 
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no, viewport-fit=cover">
+  
+  <!-- iOS specific - full screen, no toolbars -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Joystick">
+  
+  <!-- Android/Chrome -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#111827">
+  
+  <!-- Windows -->
+  <meta name="msapplication-tap-highlight" content="no">
+
+  <style>
+    /* COMPLETE LOCK - Prevent all interactions except joystick */
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+      touch-action: none;
+    }
+
+    /* Lock body completely */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      font-family: system-ui, sans-serif;
+      background: #111827;
+      color: #e5e7eb;
+      overscroll-behavior: none;
+    }
+
+    /* Remove focus outlines */
+    *:focus {
+      outline: none;
+    }
+
+    .screen {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+      position: fixed;
+      top: 0;
+      left: 0;
+      background: #111827;
+    }
+
+    .half {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-bottom: 1px solid #1f2933;
+      position: relative;
+    }
+
+    .half:last-child {
+      border-bottom: none;
+    }
+
+    .joystick {
+      width: 200px;
+      max-width: 60vw;
+      aspect-ratio: 1 / 1;
+      border-radius: 50%;
+      border: 4px solid #4b5563;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at 30% 30%, #4b5563, #111827);
+      box-shadow: 0 0 20px rgba(0,0,0,0.6);
+      overflow: hidden;
+      /* Allow joystick to handle its own touch */
+      touch-action: none;
+    }
+
+    .joystick::before {
+      content: '';
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: radial-gradient(circle at 50% 50%, rgba(96,165,250,0.1) 0%, transparent 70%);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .joystick.active::before {
+      opacity: 1;
+    }
+
+    .joystick-label {
+      position: absolute;
+      top: -2.4rem;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.95rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #9ca3af;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .center {
+      position: absolute;
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      background: #111827;
+      border: 3px solid #6b7280;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 1.1rem;
+      pointer-events: none;
+      z-index: 5;
+      transition: transform 0.15s, border-color 0.2s;
+    }
+
+    .joystick.active .center {
+      border-color: #60a5fa;
+      box-shadow: 0 0 15px rgba(96,165,250,0.6);
+    }
+
+    .dir-indicator {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .indicator-line {
+      position: absolute;
+      background: linear-gradient(to center, transparent, #60a5fa, transparent);
+      width: 4px;
+      height: 100%;
+      left: 50%;
+      top: 0;
+      transform: translateX(-50%);
+      opacity: 0;
+    }
+
+    .indicator-line.horizontal {
+      transform: translateX(-50%) rotate(90deg);
+    }
+
+    .indicator-line.active {
+      opacity: 0.8;
+      animation: pulse 1s infinite alternate;
+    }
+
+    .touch-feedback {
+      position: absolute;
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(96,165,250,0.4) 0%, transparent 70%);
+      pointer-events: none;
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(0);
+      z-index: 2;
+    }
+
+    .touch-feedback.active {
+      animation: touchEffect 0.5s ease-out;
+    }
+
+    /* Direction buttons */
+    .dir-btn {
+      position: absolute;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      border: 2px solid #9ca3af;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      user-select: none;
+      background: #111827;
+      cursor: pointer;
+      z-index: 10;
+      transition: all 0.15s;
+      touch-action: manipulation;
+    }
+
+    .dir-btn:active, .dir-btn.active {
+      border-color: #60a5fa;
+      background: rgba(96,165,250,0.1);
+      transform: scale(0.9);
+      box-shadow: 0 0 20px rgba(96,165,250,0.9);
+    }
+
+    .dir-btn span {
+      transform: translateY(-1px);
+      transition: transform 0.15s;
+    }
+
+    .dir-btn:active span, .dir-btn.active span {
+      transform: translateY(-1px) scale(1.2);
+    }
+
+    /* positions */
+    .up    { top: 10px; left: 50%; transform: translate(-50%, 0); }
+    .down  { bottom: 10px; left: 50%; transform: translate(-50%, 0); }
+    .left  { left: 10px; top: 50%; transform: translate(0, -50%); }
+    .right { right: 10px; top: 50%; transform: translate(0, -50%); }
+
+    /* feedback text */
+    .status {
+      position: fixed;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.85rem;
+      color: #9ca3af;
+      opacity: 0.85;
+      pointer-events: none;
+      background: rgba(17, 24, 39, 0.8);
+      padding: 8px 16px;
+      border-radius: 20px;
+      border: 1px solid #374151;
+      z-index: 100;
+    }
+
+    /* Volume control */
+    .volume-control {
+      position: fixed;
+      top: 15px;
+      right: 15px;
+      z-index: 100;
+      background: rgba(17, 24, 39, 0.8);
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid #374151;
+    }
+
+    .volume-slider {
+      width: 100px;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 6px;
+      border-radius: 3px;
+      background: #4b5563;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .volume-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #60a5fa;
+      cursor: pointer;
+    }
+
+    .volume-label {
+      font-size: 0.8rem;
+      color: #9ca3af;
+      margin-bottom: 5px;
+      display: block;
+      pointer-events: none;
+    }
+
+    /* Animations */
+    @keyframes pulse {
+      0% { opacity: 0.3; }
+      100% { opacity: 0.8; }
+    }
+
+    @keyframes touchEffect {
+      0% {
+        opacity: 0.7;
+        transform: translate(-50%, -50%) scale(0);
+      }
+      50% {
+        opacity: 0.4;
+        transform: translate(-50%, -50%) scale(1.2);
+      }
+      100% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(1.8);
+      }
+    }
+
+    @keyframes centerMove {
+      0% { transform: translate(var(--x-offset), var(--y-offset)) scale(1); }
+      50% { transform: translate(var(--x-offset), var(--y-offset)) scale(1.1); }
+      100% { transform: translate(var(--x-offset), var(--y-offset)) scale(1); }
+    }
+  </style>
+</head>
+<body>
+  <!-- Volume Control -->
+  <div class="volume-control">
+    <span class="volume-label">Vibration Volume</span>
+    <input type="range" min="0" max="100" value="70" class="volume-slider" id="volumeSlider">
+  </div>
+
+  <div class="screen">
+    <!-- Joystick 1 -->
+    <div class="half">
+      <div class="joystick" data-id="J1">
+        <div class="joystick-label">Joystick 1</div>
+        <div class="center">J1</div>
+        
+        <!-- Direction indicators -->
+        <div class="dir-indicator">
+          <div class="indicator-line up-line" data-dir="up"></div>
+          <div class="indicator-line down-line" data-dir="down"></div>
+          <div class="indicator-line left-line horizontal" data-dir="left"></div>
+          <div class="indicator-line right-line horizontal" data-dir="right"></div>
+        </div>
+        
+        <!-- Touch feedback element -->
+        <div class="touch-feedback"></div>
+
+        <!-- Direction buttons -->
+        <button class="dir-btn up" data-dir="up"><span>&uarr;</span></button>
+        <button class="dir-btn down" data-dir="down"><span>&darr;</span></button>
+        <button class="dir-btn left" data-dir="left"><span>&larr;</span></button>
+        <button class="dir-btn right" data-dir="right"><span>&rarr;</span></button>
+      </div>
+    </div>
+
+    <!-- Joystick 2 -->
+    <div class="half">
+      <div class="joystick" data-id="J2">
+        <div class="joystick-label">Joystick 2</div>
+        <div class="center">J2</div>
+        
+        <!-- Direction indicators -->
+        <div class="dir-indicator">
+          <div class="indicator-line up-line" data-dir="up"></div>
+          <div class="indicator-line down-line" data-dir="down"></div>
+          <div class="indicator-line left-line horizontal" data-dir="left"></div>
+          <div class="indicator-line right-line horizontal" data-dir="right"></div>
+        </div>
+        
+        <!-- Touch feedback element -->
+        <div class="touch-feedback"></div>
+
+        <!-- Direction buttons -->
+        <button class="dir-btn up" data-dir="up"><span>&uarr;</span></button>
+        <button class="dir-btn down" data-dir="down"><span>&darr;</span></button>
+        <button class="dir-btn left" data-dir="left"><span>&larr;</span></button>
+        <button class="dir-btn right" data-dir="right"><span>&rarr;</span></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="status" id="status">Ready - Touch or drag anywhere on joystick</div>
+
+  <!-- Audio elements for vibration -->
+  <audio id="vibrationSound" preload="auto">
+    <source src="vibrate.mp3" type="audio/mpeg">
+  </audio>
+
+  <script>
+    // COMPLETE ZOOM PREVENTION WITH WORKING JOYSTICK
+    // ===============================================
+
+    const statusEl = document.getElementById('status');
+    const volumeSlider = document.getElementById('volumeSlider');
+
+    // State management
+    let activeInterval = null;
+    let activeBtn = null;
+    let activeTouch = null;
+    let activeJoystick = null;
+    let activeDirection = null;
+    let audioInitialized = false;
+    
+    // Audio elements
+    const vibrationAudio = document.getElementById('vibrationSound');
+    
+    // FIXED: Initialize audio
+    function initializeAudio() {
+      if (audioInitialized) return;
+      
+      try {
+        vibrationAudio.volume = volumeSlider.value / 100;
+        vibrationAudio.loop = true;
+        audioInitialized = true;
+        console.log('Audio initialized');
+      } catch (error) {
+        console.log('Audio init error:', error);
+      }
+    }
+
+    // Update volume
+    volumeSlider.addEventListener('input', function() {
+      const volume = this.value / 100;
+      vibrationAudio.volume = volume;
+    });
+
+    // Audio vibration functions
+    function startVibration() {
+      console.log('Starting vibration');
+      
+      try {
+        if (!audioInitialized) initializeAudio();
+        
+        vibrationAudio.volume = volumeSlider.value / 100;
+        vibrationAudio.currentTime = 0;
+        
+        const playPromise = vibrationAudio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(error => {
+            console.log('Play error:', error);
+          });
+        }
+      } catch (error) {
+        console.log('Vibration error:', error);
+      }
+    }
+
+    function stopVibration() {
+      console.log('Stopping vibration');
+      try {
+        vibrationAudio.pause();
+        vibrationAudio.currentTime = 0;
+      } catch (e) {
+        console.log('Stop error:', e);
+      }
+    }
+
+    // Visual feedback functions
+    function showTouchFeedback(x, y, joystick) {
+      const feedback = joystick.querySelector('.touch-feedback');
+      if (!feedback) return;
+      
+      feedback.style.left = `${x}px`;
+      feedback.style.top = `${y}px`;
+      feedback.classList.remove('active');
+      void feedback.offsetWidth;
+      feedback.classList.add('active');
+    }
+    
+    function showDirectionIndicator(joystick, direction) {
+      const indicators = joystick.querySelectorAll('.indicator-line');
+      indicators.forEach(ind => ind.classList.remove('active'));
+      
+      if (direction) {
+        const activeIndicator = joystick.querySelector(`.${direction}-line`);
+        if (activeIndicator) activeIndicator.classList.add('active');
+      }
+    }
+    
+    function moveCenterPoint(joystick, x, y) {
+      const center = joystick.querySelector('.center');
+      if (!center) return;
+      
+      const joystickRect = joystick.getBoundingClientRect();
+      const centerX = joystickRect.width / 2;
+      const centerY = joystickRect.height / 2;
+      
+      const offsetX = Math.max(-30, Math.min(30, x - centerX)) * 0.7;
+      const offsetY = Math.max(-30, Math.min(30, y - centerY)) * 0.7;
+      
+      center.style.setProperty('--x-offset', `${offsetX}px`);
+      center.style.setProperty('--y-offset', `${offsetY}px`);
+      center.style.animation = 'centerMove 0.5s ease-out';
+    }
+    
+    function resetCenterPoint(joystick) {
+      const center = joystick.querySelector('.center');
+      if (!center) return;
+      
+      center.style.setProperty('--x-offset', '0px');
+      center.style.setProperty('--y-offset', '0px');
+      center.style.animation = '';
+    }
+
+    // Direction calculation from position
+    function calculateDirectionFromPosition(x, y, joystick) {
+      const rect = joystick.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      
+      const deltaX = x - centerX;
+      const deltaY = y - centerY;
+      
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+      if (distance < 20) return null;
+      
+      const angle = Math.atan2(deltaY, deltaX) * 180 / Math.PI;
+      
+      if (angle >= -45 && angle < 45) return 'right';
+      if (angle >= 45 && angle < 135) return 'down';
+      if (angle >= -135 && angle < -45) return 'up';
+      return 'left';
+    }
+
+    // Handle joystick drag interaction
+    function handleJoystickStart(e) {
+      // Always prevent default to stop zoom
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const joystick = e.currentTarget;
+      const joyId = joystick.dataset.id;
+      
+      let clientX, clientY;
+      if (e.type === 'touchstart') {
+        if (e.touches.length > 1) {
+          // Prevent multi-touch zoom
+          return false;
+        }
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+        activeTouch = e.touches[0].identifier;
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
+      
+      const rect = joystick.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      
+      const dir = calculateDirectionFromPosition(clientX, clientY, joystick);
+      
+      activeJoystick = joystick;
+      activeDirection = dir;
+      joystick.classList.add('active');
+      
+      showTouchFeedback(x, y, joystick);
+      showDirectionIndicator(joystick, dir);
+      moveCenterPoint(joystick, x, y);
+      
+      statusEl.textContent = `${joyId}: ${dir || 'center'} (dragging)`;
+      if (dir) startVibration();
+      
+      console.log('JOYSTICK START', joyId, dir, {x, y});
+      
+      return false;
+    }
+    
+    function handleJoystickMove(e) {
+      if (!activeJoystick) return;
+      
+      // Always prevent default to stop zoom
+      e.preventDefault();
+      e.stopPropagation();
+      
+      let clientX, clientY;
+      if (e.type === 'touchmove') {
+        // Find our active touch
+        for (let touch of e.touches) {
+          if (touch.identifier === activeTouch) {
+            clientX = touch.clientX;
+            clientY = touch.clientY;
+            break;
+          }
+        }
+        if (clientX === undefined || clientY === undefined) {
+          handleJoystickEnd(e);
+          return;
+        }
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
+      
+      const rect = activeJoystick.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      
+      const dir = calculateDirectionFromPosition(clientX, clientY, activeJoystick);
+      
+      if (dir !== activeDirection) {
+        activeDirection = dir;
+        showDirectionIndicator(activeJoystick, dir);
+        
+        if (dir) {
+          statusEl.textContent = `${activeJoystick.dataset.id}: ${dir} (dragging)`;
+          startVibration();
+        } else {
+          statusEl.textContent = `${activeJoystick.dataset.id}: center`;
+          stopVibration();
+        }
+        
+        console.log('JOYSTICK MOVE', activeJoystick.dataset.id, dir);
+      }
+      
+      moveCenterPoint(activeJoystick, x, y);
+    }
+    
+    function handleJoystickEnd(e) {
+      if (!activeJoystick) return;
+      
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const joyId = activeJoystick.dataset.id;
+      
+      activeJoystick.classList.remove('active');
+      showDirectionIndicator(activeJoystick, null);
+      resetCenterPoint(activeJoystick);
+      
+      statusEl.textContent = 'Ready - Touch or drag anywhere on joystick';
+      stopVibration();
+      
+      console.log('JOYSTICK END', joyId, activeDirection);
+      
+      activeJoystick = null;
+      activeDirection = null;
+      activeTouch = null;
+    }
+
+    // Handle button interaction
+    function handleButtonStart(e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const btn = e.currentTarget;
+      const joystick = btn.closest('.joystick');
+      const joyId = joystick.dataset.id;
+      const dir = btn.dataset.dir;
+
+      activeBtn = btn;
+      btn.classList.add('active');
+      activeDirection = dir;
+      
+      showDirectionIndicator(joystick, dir);
+      statusEl.textContent = `${joyId}: ${dir} (holding)`;
+      startVibration();
+
+      console.log('BUTTON START', joyId, dir);
+    }
+
+    function handleButtonEnd(e) {
+      if (activeBtn) {
+        const joystick = activeBtn.closest('.joystick');
+        showDirectionIndicator(joystick, null);
+        activeBtn.classList.remove('active');
+        activeBtn = null;
+        activeDirection = null;
+      }
+      stopVibration();
+      statusEl.textContent = 'Ready - Touch or drag anywhere on joystick';
+      console.log('BUTTON STOP');
+    }
+
+    // FIXED: COMPLETE ZOOM PREVENTION SYSTEM
+    // ======================================
+    
+    // 1. Prevent ALL touch events globally at capture phase
+    document.addEventListener('touchstart', function(e) {
+      // Only allow touch on specific elements
+      const target = e.target;
+      const isJoystick = target.closest('.joystick');
+      const isButton = target.classList.contains('dir-btn');
+      const isVolumeSlider = target.id === 'volumeSlider';
+      
+      if (!isJoystick && !isButton && !isVolumeSlider) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+      
+      // If multi-touch, always prevent
+      if (e.touches.length > 1) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    }, { passive: false, capture: true });
+
+    // 2. Prevent ALL touchmove globally (joystick will handle its own)
+    document.addEventListener('touchmove', function(e) {
+      // If we have an active joystick, let it handle the move
+      if (activeJoystick && e.touches.length === 1) {
+        // Check if this is our active touch
+        let isActiveTouch = false;
+        for (let touch of e.touches) {
+          if (touch.identifier === activeTouch) {
+            isActiveTouch = true;
+            break;
+          }
+        }
+        
+        if (isActiveTouch) {
+          // Allow the joystick to handle it
+          return true;
+        }
+      }
+      
+      // Prevent all other touch movement
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return false;
+    }, { passive: false, capture: true });
+
+    // 3. Prevent double-tap zoom
+    let lastTouchEnd = 0;
+    document.addEventListener('touchend', function(e) {
+      const now = Date.now();
+      if (now - lastTouchEnd <= 300) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+      }
+      lastTouchEnd = now;
+    }, { passive: false, capture: true });
+
+    // 4. Prevent gesture events (pinch zoom)
+    document.addEventListener('gesturestart', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    }, { capture: true });
+
+    document.addEventListener('gesturechange', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    }, { capture: true });
+
+    document.addEventListener('gestureend', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    }, { capture: true });
+
+    // 5. Prevent context menu
+    document.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }, { capture: true });
+
+    // 6. Prevent keyboard zoom
+    document.addEventListener('keydown', function(e) {
+      if (e.ctrlKey && (e.key === '+' || e.key === '-' || e.key === '0' || 
+          e.key === '=' || e.code === 'NumpadAdd' || 
+          e.code === 'NumpadSubtract' || e.code === 'Numpad0')) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+      }
+    }, { capture: true });
+
+    // 7. Prevent mouse wheel zoom
+    document.addEventListener('wheel', function(e) {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+      }
+    }, { passive: false, capture: true });
+
+    // 8. Attach events to joystick areas
+    document.querySelectorAll('.joystick').forEach(joystick => {
+      // Mouse events for desktop
+      joystick.addEventListener('mousedown', handleJoystickStart);
+      joystick.addEventListener('mousemove', handleJoystickMove);
+      joystick.addEventListener('mouseup', handleJoystickEnd);
+      joystick.addEventListener('mouseleave', handleJoystickEnd);
+      
+      // Touch events for mobile - MUST prevent default here too
+      joystick.addEventListener('touchstart', handleJoystickStart, { passive: false });
+      joystick.addEventListener('touchmove', handleJoystickMove, { passive: false });
+      joystick.addEventListener('touchend', handleJoystickEnd);
+      joystick.addEventListener('touchcancel', handleJoystickEnd);
+    });
+
+    // 9. Attach events to direction buttons
+    document.querySelectorAll('.dir-btn').forEach(btn => {
+      btn.addEventListener('mousedown', handleButtonStart);
+      btn.addEventListener('mouseup', handleButtonEnd);
+      btn.addEventListener('mouseleave', handleButtonEnd);
+      
+      btn.addEventListener('touchstart', handleButtonStart, { passive: false });
+      btn.addEventListener('touchend', handleButtonEnd);
+      btn.addEventListener('touchcancel', handleButtonEnd);
+    });
+
+    // 10. Global end handlers
+    window.addEventListener('mouseup', function(e) {
+      if (activeJoystick) handleJoystickEnd(e);
+      if (activeBtn) handleButtonEnd(e);
+    });
+    
+    window.addEventListener('touchend', function(e) {
+      if (activeJoystick) handleJoystickEnd(e);
+      if (activeBtn) handleButtonEnd(e);
+    });
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+      // Initialize direction indicators
+      document.querySelectorAll('.joystick').forEach(joystick => {
+        const upLine = joystick.querySelector('.up-line');
+        const downLine = joystick.querySelector('.down-line');
+        
+        if (upLine) upLine.style.transform = 'translateX(-50%)';
+        if (downLine) downLine.style.transform = 'translateX(-50%)';
+      });
+      
+      // Initialize audio on first user interaction
+      const initAudio = function() {
+        initializeAudio();
+        document.removeEventListener('click', initAudio);
+        document.removeEventListener('touchstart', initAudio);
+      };
+      
+      document.addEventListener('click', initAudio, { once: true });
+      document.addEventListener('touchstart', initAudio, { once: true });
+    });
+  </script>
+</body>
+</html>
